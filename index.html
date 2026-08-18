@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Archipelago Generation Tester</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Archipelago Generation Tester</h1>
+    <p class="subtitle">Run 100 Archipelago generations directly in your browser.</p>
+
+    <section class="card">
+      <label>Player YAML
+        <input id="yamlFile" type="file" accept=".yaml,.yml,text/yaml">
+      </label>
+      <label>APWorld
+        <input id="apworldFile" type="file" accept=".apworld,application/zip">
+      </label>
+      <div class="actions">
+        <button id="runButton" disabled>Loading Python…</button>
+        <button id="stopButton" disabled>Stop</button>
+      </div>
+      <div id="status" class="status">Loading Pyodide…</div>
+    </section>
+
+    <section class="card">
+      <div class="summary">
+        <div><strong id="passed">0</strong><span>Passed</span></div>
+        <div><strong id="failed">0</strong><span>Failed</span></div>
+        <div><strong id="completed">0</strong><span>Completed</span></div>
+      </div>
+      <progress id="progress" max="100" value="0"></progress>
+    </section>
+
+    <section class="card">
+      <h2>Results</h2>
+      <div id="results" class="results"></div>
+    </section>
+
+    <p class="note">Everything runs client-side. Your YAML and APWorld are not uploaded to a server.</p>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
