@@ -1,6 +1,9 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.29.4/full/pyodide.mjs";
 
-const ARCHIPELAGO_ZIP = "https://github.com/ArchipelagoMW/Archipelago/archive/refs/heads/main.zip";
+// The GitHub Actions Pages build downloads this file from the Archipelago repo
+// and places it next to index.html. Keeping it same-origin avoids the CORS
+// failure caused by GitHub's repository ZIP endpoint.
+const ARCHIPELAGO_ZIP = "./archipelago.zip";
 const RUNS = 100;
 
 const yamlInput = document.getElementById("yamlFile");
@@ -25,12 +28,20 @@ function updateRunButton() { runButton.disabled = !ready() || running; }
 function addResult(index, ok, seed, error) {
   const div = document.createElement("div");
   div.className = "result";
+
   const heading = document.createElement("div");
-  heading.innerHTML = `<strong class="${ok ? "pass" : "fail"}">${ok ? "PASS" : "FAIL"}</strong> — Generation ${index}` +
-    (seed ? ` — <span class="seed">Seed ${seed}</span>` : "");
+  const status = document.createElement("strong");
+  status.className = ok ? "pass" : "fail";
+  status.textContent = ok ? "PASS" : "FAIL";
+  heading.appendChild(status);
+  heading.append(` — Generation ${index}`);
+  if (seed !== null && seed !== undefined) {
+    heading.append(` — Seed ${seed}`);
+  }
   div.appendChild(heading);
+
   if (error) {
-    const pre = document.createElement("div");
+    const pre = document.createElement("pre");
     pre.className = "error";
     pre.textContent = error;
     div.appendChild(pre);
@@ -44,19 +55,32 @@ async function loadArchipelago() {
   await pyodide.loadPackage(["micropip"]);
   const micropip = pyodide.pyimport("micropip");
 
-  // These are common Archipelago runtime dependencies. Optional/platform-specific
-  // packages are deliberately not installed because the browser cannot use Kivy.
+  // Pure-Python dependencies commonly used by the Archipelago generator.
+  // Unsupported desktop/native dependencies are intentionally omitted because
+  // this is a browser-only build.
   for (const pkg of [
-    "PyYAML==6.0.3", "jinja2==3.1.6", "schema==0.7.8", "platformdirs==4.10.1",
-    "typing_extensions==4.15.0", "colorama==0.4.6", "pathspec==1.0.4", "certifi==2026.2.25",
+    "PyYAML==6.0.3",
+    "jinja2==3.1.6",
+    "schema==0.7.8",
+    "platformdirs==4.10.1",
+    "typing_extensions==4.15.0",
+    "colorama==0.4.6",
+    "pathspec==1.0.4",
+    "certifi==2026.2.25",
     "websockets==13.1"
   ]) {
-    try { await micropip.install(pkg); } catch (e) { console.warn("Could not install", pkg, e); }
+    try {
+      await micropip.install(pkg);
+    } catch (e) {
+      console.warn("Could not install", pkg, e);
+    }
   }
 
-  setStatus("Downloading Archipelago source…");
-  const response = await fetch(ARCHIPELAGO_ZIP);
-  if (!response.ok) throw new Error(`Could not download Archipelago (${response.status})`);
+  setStatus("Loading bundled Archipelago source…");
+  const response = await fetch(ARCHIPELAGO_ZIP, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Could not load bundled Archipelago (${response.status}). Make sure GitHub Pages was deployed by the repository's Actions workflow.`);
+  }
   const bytes = new Uint8Array(await response.arrayBuffer());
   pyodide.FS.writeFile("/archipelago.zip", bytes);
 
@@ -69,19 +93,24 @@ os.makedirs(root, exist_ok=True)
 with zipfile.ZipFile("/archipelago.zip") as zf:
     zf.extractall(root)
 entries = [x for x in os.listdir(root) if x.startswith("Archipelago-")]
+if not entries:
+    raise RuntimeError("Bundled Archipelago archive did not contain an Archipelago-* directory")
 source = os.path.join(root, entries[0])
 os.chdir(source)
-print(source)
 `);
 
   setStatus("Preparing browser-compatible Archipelago runtime…");
-  pyodide.runPython(`
-import os, textwrap
+  await pyodide.runPythonAsync(`
+import os, shutil
 source = os.getcwd()
-# Prevent Archipelago's normal pip/bootstrap step from running in the browser.
+
+# Prevent the desktop updater from trying to install packages in the browser.
 with open(os.path.join(source, "ModuleUpdate.py"), "w", encoding="utf-8") as f:
     f.write("def update(*args, **kwargs):\\n    return None\\n")
-# Do not build the full desktop/client stack. Keep core world-loading support plus generic.
+
+# We only need the core generator, generic helpers, and the uploaded APWorld.
+# Built-in game worlds can pull in platform-specific dependencies, so keep them
+# out of the browser runtime.
 worlds_dir = os.path.join(source, "worlds")
 for name in list(os.listdir(worlds_dir)):
     if name.startswith((".", "_", "generic")):
@@ -161,10 +190,11 @@ async function run() {
   try {
     const yamlText = await yamlInput.files[0].text();
     const apworldBytes = new Uint8Array(await apworldInput.files[0].arrayBuffer());
-    setStatus("Running generations…");
+    setStatus("Loading your YAML and APWorld…");
     await installAndPrepare(yamlText, apworldBytes);
 
-    let passed = 0, failed = 0;
+    let passed = 0;
+    let failed = 0;
     for (let i = 1; i <= RUNS; i++) {
       if (stopRequested) break;
       setStatus(`Running generation ${i} of ${RUNS}…`);
@@ -175,10 +205,11 @@ async function run() {
       failedEl.textContent = failed;
       completedEl.textContent = passed + failed;
       progressEl.value = passed + failed;
-      // Let the browser repaint between generations.
       await new Promise(requestAnimationFrame);
     }
-    setStatus(stopRequested ? `Stopped after ${passed + failed} completed generations.` : `Finished: ${passed} passed, ${failed} failed.`);
+    setStatus(stopRequested
+      ? `Stopped after ${passed + failed} completed generations.`
+      : `Finished: ${passed} passed, ${failed} failed.`);
   } catch (error) {
     setStatus(`Fatal error:\n${error?.stack || error}`);
   } finally {
@@ -189,7 +220,10 @@ async function run() {
 }
 
 runButton.addEventListener("click", run);
-stopButton.addEventListener("click", () => { stopRequested = true; setStatus("Stopping after the current generation…"); });
+stopButton.addEventListener("click", () => {
+  stopRequested = true;
+  setStatus("Stopping after the current generation…");
+});
 yamlInput.addEventListener("change", updateRunButton);
 apworldInput.addEventListener("change", updateRunButton);
 
